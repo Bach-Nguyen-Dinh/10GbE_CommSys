@@ -369,6 +369,7 @@ int main(int argc, char *argv[]) {
             }
         }
     }
+    printf("\nAll transfers completed or interrupted.\n");
 
     // Calculate and print final averages
     double avg_throughput = total_throughput_sum / repeat_count;
