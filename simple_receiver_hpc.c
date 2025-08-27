@@ -24,6 +24,13 @@
 #define MAGIC_HEADER 0xdeadbeefcafebabe
 
 typedef struct {
+    uint32_t chunk_id;
+    uint64_t file_offset;
+    uint32_t chunk_size;
+    uint32_t padding;  // For alignment
+} chunk_header_t;
+
+typedef struct {
     uint64_t magic;
     uint64_t file_size;
     char filename[256];
@@ -35,11 +42,11 @@ typedef struct {
     int client_fd;
     int port;
     char *file_data;
-    size_t start_offset;
-    size_t chunk_size;
+    size_t total_file_size;
     pthread_mutex_t *file_mutex;
     double throughput_mbps;
     double duration;
+    int chunks_received;
 } thread_data_t;
 
 static volatile int running = 1;
@@ -119,45 +126,86 @@ void* receiver_thread(void* arg) {
     pthread_barrier_wait(&start_barrier);
     
     double start_time = get_time();
-    
-    printf("Thread %d: Ready to receive %.2f MB at offset %zu\n", 
-           data->thread_id,
-           data->chunk_size / (1024.0 * 1024.0),
-           data->start_offset);
-    
-    char *buffer = data->file_data + data->start_offset;
-    size_t remaining = data->chunk_size;
     size_t total_received = 0;
+    int chunks_received = 0;
     
-    while (remaining > 0 && running) {
-        ssize_t received = recv(data->client_fd, buffer, remaining, 0);
+    printf("Thread %d: Ready to receive adaptive chunks\n", data->thread_id);
+    
+    // Receive chunks with headers
+    while (running) {
+        chunk_header_t chunk_header;
         
-        if (received < 0) {
-            if (errno == EINTR || errno == EAGAIN) continue;
-            perror("recv");
-            break;
-        } else if (received == 0) {
-            printf("Thread %d: Sender closed connection\n", data->thread_id);
+        // Receive chunk header
+        ssize_t header_received = 0;
+        char *header_ptr = (char*)&chunk_header;
+        while (header_received < sizeof(chunk_header) && running) {
+            ssize_t received = recv(data->client_fd, header_ptr + header_received, 
+                                  sizeof(chunk_header) - header_received, 0);
+            
+            if (received < 0) {
+                if (errno == EINTR || errno == EAGAIN) continue;
+                perror("recv chunk_header");
+                goto thread_exit;
+            } else if (received == 0) {
+                // Sender closed connection
+                printf("Thread %d: Sender closed connection\n", data->thread_id);
+                goto thread_exit;
+            }
+            
+            header_received += received;
+        }
+        
+        // Validate chunk fits in file
+        if (chunk_header.file_offset + chunk_header.chunk_size > data->total_file_size) {
+            printf("Thread %d: Invalid chunk: offset=%lu, size=%u exceeds file size %zu\n",
+                   data->thread_id, chunk_header.file_offset, chunk_header.chunk_size, data->total_file_size);
             break;
         }
         
-        buffer += received;
-        remaining -= received;
-        total_received += received;
+        printf("Thread %d: Receiving chunk %u: offset=%lu, size=%.1f MB\n",
+               data->thread_id, chunk_header.chunk_id, chunk_header.file_offset, 
+               chunk_header.chunk_size / (1024.0 * 1024.0));
+        
+        // Receive chunk data directly to correct file position
+        char *chunk_buffer = data->file_data + chunk_header.file_offset;
+        size_t remaining = chunk_header.chunk_size;
+        size_t chunk_received = 0;
+        
+        while (remaining > 0 && running) {
+            ssize_t received = recv(data->client_fd, chunk_buffer + chunk_received, remaining, 0);
+            
+            if (received < 0) {
+                if (errno == EINTR || errno == EAGAIN) continue;
+                perror("recv chunk_data");
+                goto thread_exit;
+            } else if (received == 0) {
+                printf("Thread %d: Sender closed connection during chunk data\n", data->thread_id);
+                goto thread_exit;
+            }
+            
+            chunk_received += received;
+            remaining -= received;
+            total_received += received;
+        }
+        
+        chunks_received++;
     }
     
-    double end_time = get_time();
-    double duration = end_time - start_time;
-    double throughput = (total_received / (1024.0 * 1024.0)) / duration;
-    data->throughput_mbps = throughput;
-    data->duration = duration;
-    
-    printf("Thread %d: Completed %.2f MB in %.2f seconds (%.2f MB/s)\n",
-           data->thread_id, total_received / (1024.0 * 1024.0), duration, throughput);
-    
-    close(data->client_fd);
-    close(data->listen_fd);
-    return NULL;
+    thread_exit: {
+        double end_time = get_time();
+        double duration = end_time - start_time;
+        double throughput = duration > 0 ? (total_received / (1024.0 * 1024.0)) / duration : 0;
+        data->throughput_mbps = throughput;
+        data->duration = duration;
+        data->chunks_received = chunks_received;
+        
+        printf("Thread %d: Completed %d chunks, %.2f MB in %.2f seconds (%.2f MB/s)\n",
+            data->thread_id, chunks_received, total_received / (1024.0 * 1024.0), duration, throughput);
+        
+        close(data->client_fd);
+        close(data->listen_fd);
+        return NULL;
+    }
 }
 
 int save_file(const char *filename, char *data, size_t size) {
@@ -265,9 +313,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    // Calculate chunk sizes for each stream
-    size_t chunk_size = header.file_size / num_streams;
-    size_t remainder = header.file_size % num_streams;
+    // Calculate chunk sizes for each stream (no longer used with adaptive chunking)
+    // size_t chunk_size = header.file_size / num_streams;
+    // size_t remainder = header.file_size % num_streams;
     
     pthread_t threads[num_streams];
     thread_data_t thread_data[num_streams];
@@ -286,11 +334,11 @@ int main(int argc, char *argv[]) {
         thread_data[i].client_fd = -1;
         thread_data[i].port = port;
         thread_data[i].file_data = file_data;
-        thread_data[i].start_offset = i * chunk_size;
-        thread_data[i].chunk_size = chunk_size + (i == num_streams - 1 ? remainder : 0);
+        thread_data[i].total_file_size = header.file_size;
         thread_data[i].file_mutex = &file_mutex;
         thread_data[i].throughput_mbps = 0.0;
         thread_data[i].duration = 0.0;
+        thread_data[i].chunks_received = 0;
         
         if (pthread_create(&threads[i], NULL, receiver_thread, &thread_data[i]) != 0) {
             perror("pthread_create");
@@ -321,16 +369,19 @@ int main(int argc, char *argv[]) {
     // Find maximum thread duration and sum throughputs
     double max_duration = 0.0;
     double total_throughput = 0.0;
+    int total_chunks = 0;
     for (int i = 0; i < num_streams; i++) {
         total_throughput += thread_data[i].throughput_mbps;
+        total_chunks += thread_data[i].chunks_received;
         if (thread_data[i].duration > max_duration) {
             max_duration = thread_data[i].duration;
         }
     }
     double total_throughput_gbps = total_throughput * 8 / 1000.0;  // Convert MB/s to Gbps (MB/s * 8 / 1000)
     
-    printf("\n=== Transfer Complete ===\n");
+    printf("\n=== Adaptive Transfer Complete ===\n");
     printf("Total size: %.2f MB\n", header.file_size / (1024.0 * 1024.0));
+    printf("Chunks received: %d\n", total_chunks);
     printf("Duration: %.2f seconds\n", max_duration);
     printf("Total throughput: %.2f MB/s (%.2f Gbps)\n", total_throughput, total_throughput_gbps);
     printf("Streams used: %d\n", num_streams);
