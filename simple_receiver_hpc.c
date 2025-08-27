@@ -1,6 +1,6 @@
 // Compile and Run
 // gcc -O3 -Wall -pthread -o simple_receiver_hpc simple_receiver_hpc.c
-// ./simple_receiver_hpc 5303 4
+// ./simple_receiver_hpc 5303 4 ./ 0
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -38,6 +38,8 @@ typedef struct {
     size_t start_offset;
     size_t chunk_size;
     pthread_mutex_t *file_mutex;
+    double throughput_mbps;
+    double duration;
 } thread_data_t;
 
 static volatile int running = 1;
@@ -147,6 +149,8 @@ void* receiver_thread(void* arg) {
     double end_time = get_time();
     double duration = end_time - start_time;
     double throughput = (total_received / (1024.0 * 1024.0)) / duration;
+    data->throughput_mbps = throughput;
+    data->duration = duration;
     
     printf("Thread %d: Completed %.2f MB in %.2f seconds (%.2f MB/s)\n",
            data->thread_id, total_received / (1024.0 * 1024.0), duration, throughput);
@@ -176,20 +180,27 @@ int save_file(const char *filename, char *data, size_t size) {
 int main(int argc, char *argv[]) {
     if (argc < 1) {
         printf("Simple High-Performance File Receiver (One-time Transfer)\n");
-        printf("Usage: %s [port] [streams] [output_dir]\n", argv[0]);
-        printf("Example: %s 5303 4 /tmp/received/\n", argv[0]);
+        printf("Usage: %s [port] [streams] [output_dir] [save_to_disk]\n", argv[0]);
+        printf("Example: %s 5303 4 /tmp/received/ 1\n", argv[0]);
+        printf("Parameters:\n");
+        printf("  port: Base port number (default: 5303)\n");
+        printf("  streams: Number of parallel streams (default: 4)\n");
+        printf("  output_dir: Directory to save received files (default: ./)\n");
+        printf("  save_to_disk: Save file to disk (1) or keep in memory only (0) (default: 1)\n");
         return 1;
     }
     
     int base_port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
     int num_streams = (argc > 2) ? atoi(argv[2]) : DEFAULT_STREAMS;
     const char *output_dir = (argc > 3) ? argv[3] : "./";
+    int save_to_disk = (argc > 4) ? atoi(argv[4]) : 1;
     
     printf("Simple High-Performance File Receiver\n");
     printf("=====================================\n");
     printf("Base port: %d\n", base_port);
     printf("Streams: %d\n", num_streams);
     printf("Output directory: %s\n", output_dir);
+    printf("Save to disk: %s\n", save_to_disk ? "enabled" : "disabled");
     printf("Waiting for sender...\n\n");
     
     signal(SIGINT, signal_handler);
@@ -278,6 +289,8 @@ int main(int argc, char *argv[]) {
         thread_data[i].start_offset = i * chunk_size;
         thread_data[i].chunk_size = chunk_size + (i == num_streams - 1 ? remainder : 0);
         thread_data[i].file_mutex = &file_mutex;
+        thread_data[i].throughput_mbps = 0.0;
+        thread_data[i].duration = 0.0;
         
         if (pthread_create(&threads[i], NULL, receiver_thread, &thread_data[i]) != 0) {
             perror("pthread_create");
@@ -300,32 +313,41 @@ int main(int argc, char *argv[]) {
     close(control_client);
     close(control_fd);
     
-    double transfer_start = get_time();
-    
     // Wait for all receiver threads to complete
     for (int i = 0; i < num_streams; i++) {
         pthread_join(threads[i], NULL);
     }
     
-    double transfer_end = get_time();
-    double total_duration = transfer_end - transfer_start;
-    double total_throughput = (header.file_size / (1024.0 * 1024.0)) / total_duration;
+    // Find maximum thread duration and sum throughputs
+    double max_duration = 0.0;
+    double total_throughput = 0.0;
+    for (int i = 0; i < num_streams; i++) {
+        total_throughput += thread_data[i].throughput_mbps;
+        if (thread_data[i].duration > max_duration) {
+            max_duration = thread_data[i].duration;
+        }
+    }
+    double total_throughput_gbps = total_throughput * 8 / 1000.0;  // Convert MB/s to Gbps (MB/s * 8 / 1000)
     
     printf("\n=== Transfer Complete ===\n");
     printf("Total size: %.2f MB\n", header.file_size / (1024.0 * 1024.0));
-    printf("Duration: %.2f seconds\n", total_duration);
-    printf("Average throughput: %.2f MB/s\n", total_throughput);
+    printf("Duration: %.2f seconds\n", max_duration);
+    printf("Total throughput: %.2f MB/s (%.2f Gbps)\n", total_throughput, total_throughput_gbps);
     printf("Streams used: %d\n", num_streams);
     
-    // Save file to disk
-    char output_path[512];
-    snprintf(output_path, sizeof(output_path), "%s/%s", output_dir, header.filename);
-    
-    printf("Saving file to: %s\n", output_path);
-    if (save_file(output_path, file_data, header.file_size) == 0) {
-        printf("File saved successfully!\n");
+    // Save file to disk if requested
+    if (save_to_disk) {
+        char output_path[512];
+        snprintf(output_path, sizeof(output_path), "%s/%s", output_dir, header.filename);
+        
+        printf("Saving file to: %s\n", output_path);
+        if (save_file(output_path, file_data, header.file_size) == 0) {
+            printf("File saved successfully!\n");
+        } else {
+            printf("Failed to save file\n");
+        }
     } else {
-        printf("Failed to save file\n");
+        printf("File kept in memory only (not saved to disk)\n");
     }
     
     free(file_data);
