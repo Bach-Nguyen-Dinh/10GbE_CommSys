@@ -1,6 +1,6 @@
 // Compile and Run
 // gcc -O3 -Wall -pthread -std=gnu11 -o simple_receiver_hpc simple_receiver_hpc.c -lm
-// ./simple_receiver_hpc 5303 4 ./ 0
+// ./simple_receiver_hpc 5303 4 ./ 0 -r 10
 
 #define _GNU_SOURCE
 #include <stdio.h>
