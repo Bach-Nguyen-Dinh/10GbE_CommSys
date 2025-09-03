@@ -63,8 +63,20 @@ typedef struct {
     volatile int should_exit;
 } repeat_coordinator_t;
 
+// Global variables
 static volatile int running = 1;
 static repeat_coordinator_t *global_coordinator = NULL;
+
+static int udp_sock = -1;
+static struct sockaddr_in udp_addr;
+static volatile int udp_initialized = 0;
+
+// Function prototypes
+static void send_progress_update(int transfer_num, int thread_id, size_t bytes_received, 
+                                 size_t total_bytes, int chunks_received);
+
+static void send_transfer_event(const char* event, int transfer_num, const char* filename);
+
 
 static inline void print_sockbufs(int fd, const char *tag, int is_rx) {
     int sz = 0; socklen_t sl = sizeof(sz);
@@ -150,14 +162,22 @@ void* receiver_thread(void* arg) {
 
     pthread_barrier_wait(&global_coordinator->start_barrier);
 
+    // Send transfer start event (only from thread 0)
+    if (data->thread_id == 0) {
+        send_transfer_event("TRANSFER_START", data->repeat_num, "current_file.png");
+    }
+
     double start_time = get_time();
     size_t total_received = 0;
     int chunks_received = 0;
+    size_t last_progress_bytes = 0;
+    double last_progress_time = start_time;
 
     while (running && !global_coordinator->should_exit) {
         chunk_header_t chunk_header;
         ssize_t header_received = 0;
         char *header_ptr = (char*)&chunk_header;
+        
         while (header_received < (ssize_t)sizeof(chunk_header) && running) {
             ssize_t received = recv(data->client_fd, header_ptr + header_received,
                                     sizeof(chunk_header) - header_received, 0);
@@ -179,6 +199,7 @@ void* receiver_thread(void* arg) {
             break;
         }
 
+        // Receive chunk data
         if (data->rx_discard) {
             size_t remaining = chunk_header.chunk_size;
             while (remaining > 0 && running) {
@@ -201,11 +222,32 @@ void* receiver_thread(void* arg) {
                 total_received += received;
             }
         }
+        
         chunks_received++;
+        
+        // **PROGRESS UPDATE LOGIC** - Send every 16MB or 0.5 seconds
+        double current_time = get_time();
+        size_t bytes_since_last = total_received - last_progress_bytes;
+        double time_since_last = current_time - last_progress_time;
+        
+        if (bytes_since_last >= (16 * 1024 * 1024) || time_since_last >= 0.5) {
+            send_progress_update(data->repeat_num, data->thread_id, 
+                            total_received, data->total_file_size, chunks_received);
+            last_progress_bytes = total_received;
+            last_progress_time = current_time;
+        }
     }
 
 thread_exit:
     {
+        // Send final progress update
+        send_progress_update(data->repeat_num, data->thread_id, 
+                        total_received, data->total_file_size, chunks_received);
+        // Send transfer complete event (only from thread 0)
+        if (data->thread_id == 0) {
+            send_transfer_event("TRANSFER_COMPLETE", data->repeat_num, "current_file.png");
+        }
+
         double end_time = get_time();
         double duration = end_time - start_time;
         double throughput = duration > 0 ? (total_received / (1024.0 * 1024.0)) / duration : 0;
@@ -234,6 +276,47 @@ int save_file(const char *filename, char *data, size_t size) {
     return 0;
 }
 
+static int setup_udp_socket() {
+    udp_sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (udp_sock < 0) {
+        perror("UDP socket creation failed");
+        return -1;
+    }
+    
+    memset(&udp_addr, 0, sizeof(udp_addr));
+    udp_addr.sin_family = AF_INET;
+    udp_addr.sin_port = htons(5666);  // Changed to port 5666
+    inet_pton(AF_INET, "127.0.0.1", &udp_addr.sin_addr);
+    
+    udp_initialized = 1;
+    printf("UDP progress socket setup complete (port 5666)\n");
+    return 0;
+}
+
+static void send_progress_update(int transfer_num, int thread_id, size_t bytes_received, 
+                               size_t total_bytes, int chunks_received) {
+    if (!udp_initialized || udp_sock < 0) return;
+    
+    char msg[256];
+    snprintf(msg, sizeof(msg), 
+             "PROGRESS:%d:%d:%zu:%zu:%d:%.3f", 
+             transfer_num, thread_id, bytes_received, total_bytes, 
+             chunks_received, get_time());
+    
+    sendto(udp_sock, msg, strlen(msg), 0, 
+           (struct sockaddr*)&udp_addr, sizeof(udp_addr));
+}
+
+static void send_transfer_event(const char* event, int transfer_num, const char* filename) {
+    if (!udp_initialized || udp_sock < 0) return;
+    
+    char msg[512];
+    snprintf(msg, sizeof(msg), "%s:%d:%s:%.3f", event, transfer_num, filename, get_time());
+    
+    sendto(udp_sock, msg, strlen(msg), 0, 
+           (struct sockaddr*)&udp_addr, sizeof(udp_addr));
+}
+
 int main(int argc, char *argv[]) {
     if (argc < 1) return 1;
 
@@ -247,7 +330,11 @@ int main(int argc, char *argv[]) {
            base_port, num_streams, output_dir, save_to_disk ? "yes" : "no");
 
     signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
+    signal(SIGKILL, signal_handler);
+
+    if (setup_udp_socket() < 0) {
+        printf("Warning: UDP progress updates disabled\n");
+    }
 
     int control_fd = create_listener(base_port);
     if (control_fd < 0) return 1;
@@ -400,5 +487,8 @@ cleanup:
     free(file_data);
     pthread_barrier_destroy(&coordinator.start_barrier);
     pthread_barrier_destroy(&coordinator.end_barrier);
+    if (udp_sock >= 0) {
+        close(udp_sock);
+    }
     return 0;
 }
