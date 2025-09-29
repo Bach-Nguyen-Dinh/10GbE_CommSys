@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HPC File Transfer Interface</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            /* background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); */
+            background: rgba(17, 18, 23);
+            color: #ccccdc;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            /* max-width: 1600px; */
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+            height: calc(100vh - 40px);
+        }
+
+        .control-panel {
+            /* background: rgba(24, 27, 31); */
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            /* border: 1px solid rgba(255, 255, 255, 0.2); */
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .display-panel {
+            /* background: rgba(24, 27, 31); */
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            /* border: 1px solid rgba(255, 255, 255, 0.2); */
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            background: linear-gradient(45deg, #00d2ff, #3a7bd5);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(0, 210, 255, 0.3);
+        } */
+
+        .section {
+            background: rgba(24, 27, 31);
+            border-radius: 2px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* .section h3 {
+            margin-bottom: 15px;
+            color: #00d2ff;
+            font-size: 1.2em;
+        } */
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #e0e0e0;
+        }
+
+        select, button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 2px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        select {
+            background: rgba(17, 18, 23);
+            color: #ccccdc;
+            border-radius: 2px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        button {
+            background: linear-gradient(45deg, #00d2ff, #3a7bd5);
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 210, 255, 0.4);
+        }
+
+        button:disabled {
+            background: rgba(100, 100, 100, 0.5);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .close-btn {
+            background: linear-gradient(45deg, #ff9500, #ff6b35) !important;
+        }
+
+        .close-btn:hover:not(:disabled) {
+            box-shadow: 0 8px 25px rgba(255, 149, 0, 0.4) !important;
+        }
+
+        .reset-btn {
+            background: linear-gradient(45deg, #ff416c, #ff4b2b) !important;
+        }
+
+        .reset-btn:hover:not(:disabled) {
+            box-shadow: 0 8px 25px rgba(255, 65, 108, 0.4) !important;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 2px;
+            margin-top: 10px;
+            text-align: center;
+            font-weight: 500;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .status.success {
+            background: rgba(0, 255, 0, 0.1);
+            border-color: #00ff00;
+        }
+
+        .status.error {
+            background: rgba(255, 0, 0, 0.1);
+            border-color: #ff0000;
+        }
+
+        .status.loading {
+            background: rgba(255, 255, 0, 0.1);
+            border-color: #ffff00;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .metric-card {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 2px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #00d2ff;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #ccc;
+        }
+
+        /* Progress section for showing transfer status */
+        .progress-section {
+            margin-bottom: 20px;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 2px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #00d2ff, #3a7bd5);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+
+        /* Single thumbnail display */
+        .thumbnail-display {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgb(24, 27, 31);
+            border-radius: 2px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            min-height: 500px;
+        }
+
+        .thumbnail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .thumbnail-title {
+            color: #ccccdc;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+
+        .thumbnail-counter {
+            color: #ccc;
+            font-size: 0.9em;
+        }
+
+        .thumbnail-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            position: relative;
+            overflow: hidden;
+            min-height: 400px;
+            transition: all 0.3s ease;
+        }
+
+        /* .thumbnail-container.received {
+            border-color: #00d2ff;
+            box-shadow: 0 0 15px rgba(0, 210, 255, 0.3);
+        }
+
+        .thumbnail-container.receiving {
+            border-color: #ffff00;
+            box-shadow: 0 0 15px rgba(255, 255, 0, 0.3);
+            animation: pulse 1s infinite;
+        } */
+
+        .thumbnail-container img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            border-radius: 6px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .thumbnail-placeholder {
+            color: #666;
+            font-size: 1.2em;
+            text-align: center;
+        }
+
+        .thumbnail-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .thumbnail-filename {
+            font-weight: bold;
+            color: #00d2ff;
+        }
+
+        .thumbnail-position {
+            color: #ccc;
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        /* Loading spinner */
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid #00d2ff;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Button grid for receiver control */
+        .button-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .button-full-width {
+            grid-column: span 2;
+        }
+    </style>
+</head>
+<body>    
+    <div class="container">
+        <div class="control-panel">
+            <div class="section">
+                <h3>File Discovery</h3>
+                <div class="form-group">
+                    <button onclick="scanFiles()" id="scanBtn">Fetch Files</button>
+                </div>
+                <div class="form-group">
+                    <label for="fileSelect">Select PNG File:</label>
+                    <select id="fileSelect" disabled>
+                        <option value="">No files found</option>
+                    </select>
+                </div>
+                <div class="status" id="scanStatus">Ready to Fetch</div>
+            </div>
+
+            <div class="section">
+                <h3>Transfer Control</h3>
+                <div class="form-group">
+                    <button onclick="startReceiver()" id="startBtn">Start Receiver</button>
+                </div>
+                <div class="form-group">
+                    <button onclick="sendFile()" id="sendBtn" disabled>Send File</button>
+                </div>
+                <div class="form-group">
+                    <div class="button-grid">
+                        <button onclick="closeReceiver()" id="closeBtn" class="close-btn">Close Receiver</button>
+                        <button onclick="resetSystem()" id="resetBtn" class="reset-btn">Reset System</button>
+                    </div>
+                </div>
+                <div class="status" id="transferStatus">Receiver not started</div>
+            </div>
+
+            <div class="section progress-section">
+                <h3>Transfer Progress</h3>
+                <div class="progress-info">
+                    <span id="progressText">Ready</span>
+                    <span id="progressCount">0/30</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h3>Transfer Metrics</h3>
+                <iframe 
+                    src="http://localhost:3000/d-solo/debfk50vlpszkr/b52adf2?orgId=1&from=now-1m&to=now&refresh=1s&panelId=220" 
+                    width="450" 
+                    height="200" 
+                    frameborder="0">
+                </iframe>
+                <div class="metrics">
+                    <div class="metric-card">
+                        <div class="metric-value" id="fileSize">--</div>
+                        <div class="metric-label">File Size (MB)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="duration">--</div>
+                        <div class="metric-label">Avg Duration (s)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="throughput">--</div>
+                        <div class="metric-label">Avg Throughput (Gbps)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="speed">--</div>
+                        <div class="metric-label">Avg Speed (MB/s)</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="display-panel">
+            <div class="thumbnail-display">
+                <div class="thumbnail-header">
+                    <div class="thumbnail-title">Latest Received Image</div>
+                    <div class="thumbnail-counter" id="thumbnailCounter">0/30 received</div>
+                </div>
+                <div class="thumbnail-container" id="thumbnailContainer">
+                    <div class="thumbnail-placeholder">
+                        No image received yet<br>
+                        <small>Latest image will appear here after transfer</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Socket.IO for real-time communication -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    
+    <script>
+        let receiverRunning = false;
+        let selectedFile = null;
+        let transferInProgress = false;
+        let socket = null;
+        let currentTransferCount = 0;
+        let totalTransfers = 30;
+
+        // Initialize WebSocket connection
+        function initializeSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('Connected to server via WebSocket');
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from server');
+            });
+            
+            // Handle real-time thumbnail updates
+            socket.on('thumbnail_update', function(data) {
+                console.log('Thumbnail update received:', data);
+                updateLatestThumbnail(data.position, data.thumbnail_url, data.error, data.filename);
+            });
+            
+            // Handle transfer progress updates
+            socket.on('transfer_progress', function(data) {
+                console.log('Transfer progress:', data);
+                updateProgress(data.completed, data.total);
+            });
+            
+            // Handle transfer started
+            socket.on('transfer_started', function(data) {
+                console.log('Transfer started:', data);
+                transferInProgress = true;
+                selectedFile = data.filename;
+                updateTransferStatus('Transfer initiated ...', 'loading');
+                clearDisplay();
+                updateProgress(0, data.total_transfers);
+            });
+            
+            // Handle transfer completed
+            socket.on('transfer_completed', function(data) {
+                console.log('Transfer completed:', data);
+                transferInProgress = false;
+                
+                if (data.success) {
+                    updateMetrics(data.metrics);
+                    
+                    // Show source of metrics
+                    const source = data.source === 'rdb_sender' ? 'RDB Sender' : 'HPC Receiver';
+                    updateTransferStatus(`All transfers completed successfully`);
+                    updateProgress(totalTransfers, totalTransfers);
+                    
+                    console.log('Final metrics from', source + ':', data.metrics);
+                } else {
+                    updateTransferStatus('Transfer failed: ' + data.error, 'error');
+                }
+                
+                document.getElementById('sendBtn').disabled = false;
+            });
+            
+            // Handle system reset
+            socket.on('system_reset', function() {
+                console.log('System reset received');
+                clearDisplay();
+                transferInProgress = false;
+                document.getElementById('sendBtn').disabled = true;
+            });
+        }
+
+        // Update the latest thumbnail display
+        function updateLatestThumbnail(position, thumbnailUrl, error, filename) {
+            const container = document.getElementById('thumbnailContainer');
+            
+            if (error) {
+                // Thumbnail not found or error
+                container.className = 'thumbnail-container';
+                container.innerHTML = `
+                    <div class="thumbnail-placeholder">
+                        Transfer ${position} - No thumbnail available<br>
+                        <small>${error}</small>
+                    </div>
+                `;
+                console.warn(`Thumbnail error for position ${position}: ${error}`);
+                return;
+            }
+            
+            if (!thumbnailUrl) {
+                // No thumbnail URL provided
+                container.className = 'thumbnail-container';
+                container.innerHTML = `
+                    <div class="thumbnail-placeholder">
+                        Transfer ${position} - Failed to load thumbnail
+                    </div>
+                `;
+                return;
+            }
+            
+            // Show receiving state first
+            container.className = 'thumbnail-container receiving';
+            container.innerHTML = `
+                <div class="spinner"></div>
+                <div class="thumbnail-info">
+                    <div class="thumbnail-filename">Loading ${filename || 'image'}...</div>
+                    <div class="thumbnail-position">Transfer ${position}</div>
+                </div>
+            `;
+            
+            // Load thumbnail image
+            const img = new Image();
+            const timestamp = new Date().getTime();
+            
+            img.onload = function() {
+                container.className = 'thumbnail-container received';
+                container.innerHTML = `
+                    <img src="${this.src}" alt="Transfer ${position}">
+                    <div class="thumbnail-info">
+                        <div class="thumbnail-filename">${filename || 'Unknown file'}</div>
+                        <div class="thumbnail-position">Transfer ${position}</div>
+                    </div>
+                `;
+                console.log(`Latest thumbnail updated for position ${position}`);
+            };
+            
+            img.onerror = function() {
+                container.className = 'thumbnail-container';
+                container.innerHTML = `
+                    <div class="thumbnail-placeholder">
+                        Transfer ${position} - Failed to load image<br>
+                        <small>File: ${filename || 'Unknown'}</small>
+                    </div>
+                `;
+                console.error(`Failed to load thumbnail for position ${position}: ${thumbnailUrl}`);
+            };
+            
+            // Add timestamp to prevent caching issues
+            img.src = `${thumbnailUrl}?t=${timestamp}`;
+        }
+
+        // Update progress display
+        function updateProgress(completed, total) {
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const progressCount = document.getElementById('progressCount');
+            const thumbnailCounter = document.getElementById('thumbnailCounter');
+            
+            const percentage = (completed / total) * 100;
+            
+            progressFill.style.width = `${percentage}%`;
+            progressCount.textContent = `${completed}/${total}`;
+            thumbnailCounter.textContent = `${completed}/${total} received`;
+            
+            if (completed === 0) {
+                progressText.textContent = 'Ready';
+            } else if (completed < total) {
+                progressText.textContent = `Receiving file ${completed + 1}...`;
+            } else {
+                progressText.textContent = 'All transfers complete';
+            }
+        }
+
+        // Basic status polling for receiver state (reduced frequency)
+        function startBasicPolling() {
+            setInterval(async () => {
+                try {
+                    const response = await fetch('/api/status');
+                    const data = await response.json();
+                    
+                    // Only update receiver status, not transfer progress (WebSocket handles that)
+                    if (data.receiver_running !== receiverRunning) {
+                        receiverRunning = data.receiver_running;
+                        updateReceiverUI();
+                    }
+                    
+                } catch (error) {
+                    console.error('Status polling error:', error);
+                }
+            }, 5000); // Poll every 5 seconds for basic status only
+        }
+
+        // Update receiver UI based on status
+        function updateReceiverUI() {
+            const startBtn = document.getElementById('startBtn');
+            const sendBtn = document.getElementById('sendBtn');
+            const closeBtn = document.getElementById('closeBtn');
+            const transferStatus = document.getElementById('transferStatus');
+            
+            if (receiverRunning) {
+                startBtn.textContent = 'Receiver Running';
+                startBtn.disabled = true;
+                sendBtn.disabled = !selectedFile || transferInProgress;
+                closeBtn.disabled = false;
+                transferStatus.textContent = 'Receiver listening';
+                transferStatus.className = 'status success';
+            } else {
+                startBtn.textContent = 'Start Receiver';
+                startBtn.disabled = false;
+                sendBtn.disabled = true;
+                closeBtn.disabled = true;
+                transferStatus.textContent = 'Receiver not started';
+                transferStatus.className = 'status';
+            }
+        }
+
+        // Update transfer status
+        function updateTransferStatus(message, type = '') {
+            const transferStatus = document.getElementById('transferStatus');
+            transferStatus.textContent = message;
+            transferStatus.className = `status ${type}`;
+            if (type === 'loading') {
+                transferStatus.classList.add('pulse');
+            } else {
+                transferStatus.classList.remove('pulse');
+            }
+        }
+
+        // Scan for files on RDB
+        async function scanFiles() {
+            const scanBtn = document.getElementById('scanBtn');
+            const scanStatus = document.getElementById('scanStatus');
+            
+            scanBtn.disabled = true;
+            scanStatus.textContent = 'Scanning RDB...';
+            scanStatus.className = 'status loading pulse';
+            
+            try {
+                const response = await fetch('/api/scan-files');
+                const data = await response.json();
+                
+                if (data.success) {
+                    scanStatus.textContent = `Found ${data.files.length} PNG files`;
+                    scanStatus.className = 'status success';
+                    populateFileSelect(data.files);
+                } else {
+                    scanStatus.textContent = 'Scan failed';
+                    scanStatus.className = 'status error';
+                }
+            } catch (error) {
+                console.error('Scan error:', error);
+                scanStatus.textContent = 'Scan failed: Connection error';
+                scanStatus.className = 'status error';
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
+
+        // Populate file selection dropdown
+        function populateFileSelect(files) {
+            const select = document.getElementById('fileSelect');
+            select.innerHTML = '';
+            
+            if (files.length === 0) {
+                select.innerHTML = '<option value="">No PNG files found</option>';
+                select.disabled = true;
+            } else {
+                select.innerHTML = '<option value="">Select a file...</option>';
+                files.forEach(file => {
+                    const option = document.createElement('option');
+                    option.value = file;
+                    option.textContent = file;
+                    select.appendChild(option);
+                });
+                select.disabled = false;
+                
+                select.onchange = function() {
+                    selectedFile = this.value;
+                    clearDisplay();
+                    document.getElementById('sendBtn').disabled = !receiverRunning || !selectedFile || transferInProgress;
+                };
+            }
+        }
+
+        // Start file receiver
+        async function startReceiver() {
+            const startBtn = document.getElementById('startBtn');
+            
+            startBtn.disabled = true;
+            updateTransferStatus('Starting receiver...', 'loading');
+            
+            try {
+                const response = await fetch('/api/start-receiver', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    receiverRunning = true;
+                    updateReceiverUI();
+                } else {
+                    updateTransferStatus('Failed to start receiver: ' + data.message, 'error');
+                    startBtn.disabled = false;
+                }
+            } catch (error) {
+                console.error('Start receiver error:', error);
+                updateTransferStatus('Failed to start receiver: Connection error', 'error');
+                startBtn.disabled = false;
+            }
+        }
+
+        // Close file receiver
+        async function closeReceiver() {
+            const closeBtn = document.getElementById('closeBtn');
+            
+            closeBtn.disabled = true;
+            updateTransferStatus('Closing receiver...', 'loading');
+            
+            try {
+                const response = await fetch('/api/close-receiver', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    receiverRunning = false;
+                    transferInProgress = false;
+                    updateReceiverUI();
+                    updateTransferStatus('Receiver closed', 'success');
+                } else {
+                    updateTransferStatus('Failed to close receiver', 'error');
+                    closeBtn.disabled = false;
+                }
+            } catch (error) {
+                console.error('Close receiver error:', error);
+                updateTransferStatus('Failed to close receiver: Connection error', 'error');
+                closeBtn.disabled = false;
+            }
+        }
+
+        // Send file from RDB to HPC (10 times)
+        async function sendFile() {
+            if (!selectedFile) {
+                alert('Please select a file first');
+                return;
+            }
+            
+            const sendBtn = document.getElementById('sendBtn');
+            
+            sendBtn.disabled = true;
+            updateTransferStatus('Initiating transfer...', 'loading');
+            clearDisplay();
+            updateProgress(0, totalTransfers);
+            
+            try {
+                const response = await fetch('/api/send-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: selectedFile })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Transfer initiated - WebSocket will handle updates
+                    console.log('Transfer initiated successfully');
+                } else {
+                    updateTransferStatus('Transfer failed: ' + data.error, 'error');
+                    transferInProgress = false;
+                    sendBtn.disabled = false;
+                    updateProgress(0, totalTransfers);
+                }
+            } catch (error) {
+                console.error('Send file error:', error);
+                updateTransferStatus('Transfer failed: Connection error', 'error');
+                transferInProgress = false;
+                sendBtn.disabled = false;
+                updateProgress(0, totalTransfers);
+            }
+        }
+
+        // Update metrics display
+        function updateMetrics(metrics) {
+            console.log('Updating final metrics:', metrics);
+            
+            document.getElementById('fileSize').textContent = 
+                metrics.fileSize ? metrics.fileSize.toFixed(2) : '--';
+            document.getElementById('duration').textContent = 
+                metrics.duration ? metrics.duration.toFixed(3) : '--';
+            document.getElementById('throughput').textContent = 
+                metrics.throughput ? metrics.throughput.toFixed(2) : '--';
+            document.getElementById('speed').textContent = 
+                metrics.speed ? metrics.speed.toFixed(2) : '--';
+        }
+
+        // Clear display
+        function clearDisplay() {
+            clearMetrics();
+            clearThumbnail();
+            updateProgress(0, totalTransfers);
+        }
+
+        // Clear metrics
+        function clearMetrics() {
+            document.getElementById('fileSize').textContent = '--';
+            document.getElementById('duration').textContent = '--';
+            document.getElementById('throughput').textContent = '--';
+            document.getElementById('speed').textContent = '--';
+        }
+
+        // Clear thumbnail display
+        function clearThumbnail() {
+            const container = document.getElementById('thumbnailContainer');
+            container.className = 'thumbnail-container';
+            container.innerHTML = `
+                <div class="thumbnail-placeholder">
+                    No image received yet<br>
+                    <small>Latest image will appear here after transfer</small>
+                </div>
+            `;
+        }
+
+        // Reset entire system
+        async function resetSystem() {
+            if (!confirm('Are you sure you want to reset the entire system?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/reset', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Reset UI state
+                    receiverRunning = false;
+                    selectedFile = null;
+                    transferInProgress = false;
+                    
+                    document.getElementById('startBtn').textContent = 'Start Receiver';
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('sendBtn').disabled = true;
+                    document.getElementById('closeBtn').disabled = true;
+                    document.getElementById('fileSelect').innerHTML = '<option value="">No files found</option>';
+                    document.getElementById('fileSelect').disabled = true;
+                    
+                    document.getElementById('scanStatus').textContent = 'Ready to scan';
+                    document.getElementById('scanStatus').className = 'status';
+                    document.getElementById('transferStatus').textContent = 'System reset';
+                    document.getElementById('transferStatus').className = 'status';
+                    
+                    clearDisplay();
+                } else {
+                    alert('Reset failed');
+                }
+            } catch (error) {
+                console.error('Reset error:', error);
+                alert('Reset failed: Connection error');
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            console.log('Page loaded - initializing interface');
+            clearThumbnail();
+            initializeSocket();
+            startBasicPolling();
+        });
+
+        // Handle page unload to cleanup receiver
+        window.addEventListener('beforeunload', function() {
+            if (receiverRunning) {
+                fetch('/api/close-receiver', { method: 'POST' });
+            }
+            if (socket) {
+                socket.disconnect();
+            }
+        });
+    </script>
+</body>
+</html>

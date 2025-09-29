@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HPC File Transfer Interface - Repeat Transfers</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Inter", "Helvetica", "Arial", sans-serif;
+            background: rgba(17, 18, 23);
+            color: #ccccdc;
+            height: 100vh;
+            overflow: hidden; /* Prevent body scroll */
+        }
+
+        .container {
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 5fr;
+            height: 1190px; /* Fixed height */
+            max-height: 1190px;
+            overflow: hidden; /* Prevent container scroll */
+        }
+
+        .control-panel {
+            backdrop-filter: blur(10px);
+            padding-right: 10px;
+            padding-left: 10px;
+            padding-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: 100%; /* Take full height of container */
+            overflow-y: auto; /* Allow scrolling only in control panel */
+            overflow-x: hidden; /* Prevent horizontal scroll */
+        }
+
+        .display-panel {
+            backdrop-filter: blur(10px);
+            padding-right: 10px;
+            padding-top: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 92%;
+            overflow: hidden; /* No scrolling in display panel */
+        }
+
+        .section {
+            background: rgba(24, 27, 31);
+            border-radius: 6px;
+            padding-left: 10px;
+            padding-right: 10px;
+            padding-bottom: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            flex-shrink: 0; /* Prevent sections from shrinking */
+        }
+
+        .form-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #e0e0e0;
+            font-size: 11px;
+        }
+
+        select, button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        select {
+            background: rgba(17, 18, 23);
+            color: #ccccdc;
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 14px;
+        }
+
+        button {
+            background: linear-gradient(45deg, #0033ff, #3a7bd5);
+            color: white;
+            cursor: pointer;
+            letter-spacing: 1px;
+            font-size: 14px;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0, 210, 255, 0.4);
+        }
+
+        button:disabled {
+            background: rgba(100, 100, 100, 0.5);
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .close-btn {
+            background: linear-gradient(45deg, #ff6a00, #ff6b35) !important;
+        }
+
+        .close-btn:hover:not(:disabled) {
+            box-shadow: 0 8px 25px rgba(255, 149, 0, 0.4) !important;
+        }
+
+        .reset-btn {
+            background: linear-gradient(45deg, #c90d0d, #ff3c1a) !important;
+        }
+
+        .reset-btn:hover:not(:disabled) {
+            box-shadow: 0 8px 25px rgba(255, 65, 108, 0.4) !important;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 10px;
+            text-align: center;
+            font-weight: 500;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .status.success {
+            background: rgba(0, 255, 0, 0.1);
+            border-color: #00ff00;
+        }
+
+        .status.error {
+            background: rgba(255, 0, 0, 0.1);
+            border-color: #ff0000;
+        }
+
+        .status.loading {
+            background: rgba(255, 255, 0, 0.1);
+            border-color: #ffff00;
+        }
+
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+            gap: 15px;
+        }
+
+        .metric-card {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 5px;
+            border-radius: 6px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .metric-value {
+            font-size: 0.9em;
+            font-weight: bold;
+            color: #00d2ff;
+            margin-bottom: 5px;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            color: #ccc;
+        }
+
+        .progress-section {
+            margin-bottom: 0px;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(45deg, #00d2ff, #3a7bd5);
+            width: 0%;
+            transition: width 0.5s ease;
+        }
+
+        .thumbnail-display {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgb(24, 27, 31);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding-left: 10px;
+            padding-right: 10px;
+            height: 100%; /* Take full height */
+            overflow: hidden; /* No scrolling */
+        }
+        
+        .thumbnail-grid {
+            padding-bottom: 5px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            gap: 5px;
+            flex: 1;
+            height: calc(100% - 60px); /* Account for header height */
+        }
+        
+        /* Hide the underlying slots that are covered by the large slot */
+        .hidden-slot {
+            display: none;
+        }
+        
+        /* Large slot spans positions 1,2,4,5 (top-left 2x2) */
+        .large-slot {
+            grid-column: 1 / 3; /* Spans columns 1-2 */
+            grid-row: 1 / 3;    /* Spans rows 1-2 */
+            background: rgba(0, 0, 0, 0.3); /* Same as regular slots */
+            border: 2px solid rgba(255, 255, 255, 0.1); /* Same as regular slots */
+        }
+        
+        .large-slot .slot-number {
+            font-size: 0.8em; /* Same as regular slots */
+            background: rgba(0, 0, 0, 0.7); /* Same as regular slots */
+            padding: 2px 6px; /* Same as regular slots */
+        }
+        
+        .thumbnail-slot {
+            background: rgba(0, 0, 0, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .thumbnail-slot img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Stretch to fill the slot completely */
+            border-radius: 6px;
+        }
+
+        .thumbnail-slot .slot-number {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 2px 6px;
+            border-radius: 6px;
+            font-size: 0.8em;
+            font-weight: bold;
+            z-index: 10;
+        }
+        
+        .thumbnail-slot .slot-placeholder {
+            color: #666;
+            font-size: 0.9em;
+            text-align: center;
+        }
+        
+        .thumbnail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0; /* Prevent header from shrinking */
+            height: 45px; /* Fixed height for header */
+        }
+        
+        .thumbnail-title {
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        
+        .thumbnail-counter {
+            color: #ccc;
+            font-size: 0.9em;
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top: 3px solid #00d2ff;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .button-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .button-full-width {
+            grid-column: span 2;
+        }
+
+        .dropdown-section {
+            margin-top: 15px;
+        }
+
+        .dropdown-toggle {
+            width: 100%;
+            padding: 10px 15px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            color: #ccccdc;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+
+        .dropdown-toggle:hover {
+            background: rgba(0, 0, 0, 0.5);
+            transform: none;
+            box-shadow: none;
+        }
+
+        .dropdown-arrow {
+            transition: transform 0.3s ease;
+        }
+
+        .dropdown-arrow.rotated {
+            transform: rotate(180deg);
+        }
+
+        .dropdown-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            border-radius: 6px;
+            margin-top: 5px;
+        }
+
+        .dropdown-content.expanded {
+            max-height: 200px;
+        }
+
+        /* Custom scrollbar for control panel */
+        .control-panel::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .control-panel::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+        }
+
+        .control-panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+        }
+
+        .control-panel::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .repeat-info {
+            background: rgba(0, 100, 255, 0.1);
+            border: 1px solid rgba(0, 100, 255, 0.3);
+            padding: 10px;
+            border-radius: 6px;
+            margin-bottom: 10px;
+            font-size: 12px;
+            text-align: center;
+        }
+
+        .repeat-count {
+            font-weight: bold;
+            color: #00d2ff;
+        }
+    </style>
+</head>
+<body>    
+    <div class="container">
+        <div class="control-panel">
+            <div class="section">
+                <div class="thumbnail-header">
+                    <h3>Transfer Control</h3>
+                </div>
+                <div class="form-group">
+                    <button onclick="scanFiles()" id="scanBtn">Fetch Files</button>
+                </div>
+                <div class="form-group">
+                    <label for="fileSelect">Select File:</label>
+                    <select id="fileSelect" disabled>
+                        <option value="">No files found</option>
+                    </select>
+                </div>
+                <div class="status" id="scanStatus">Ready to Fetch</div>
+            </div>
+
+            <div class="section">
+                <div class="form-group" style="padding-top: 10px;">
+                    <button onclick="startReceiver()" id="startBtn">Start Receiver</button>
+                </div>
+                <div class="form-group">
+                    <button onclick="sendFile()" id="sendBtn" disabled>Send File</button>
+                </div>
+                <div class="form-group">
+                    <div class="button-grid">
+                        <button onclick="closeReceiver()" id="closeBtn" class="close-btn">Close Receiver</button>
+                        <button onclick="resetSystem()" id="resetBtn" class="reset-btn">Reset System</button>
+                    </div>
+                </div>
+                <div class="status" id="transferStatus">Receiver not started</div>
+            </div>
+
+            <div class="section progress-section">
+                <div class="thumbnail-header">
+                    <h3>Transfer Progress</h3>
+                    <span id="progressCount">0/9</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+            </div>
+
+            <!-- <iframe 
+                src="http://localhost:3000/d-solo/debfk50vlpszkr/b52adf2?orgId=1&from=now-1m&to=now&refresh=1s&panelId=220" 
+                width="100%" 
+                height="213" 
+                frameborder="0"
+                style="border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 6px; flex-shrink: 0;">
+            </iframe> -->
+
+            <div class="section">
+                <div class="thumbnail-header">
+                    <h3>Transfer Metrics</h3>
+                </div>
+                <div class="metrics">
+                    <div class="metric-card">
+                        <div class="metric-value" id="fileSize">--</div>
+                        <div class="metric-label">File Size (MB)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="duration">--</div>
+                        <div class="metric-label">Avg Duration (s)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="throughput">--</div>
+                        <div class="metric-label">Avg Throughput (Gbps)</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-value" id="speed">--</div>
+                        <div class="metric-label">Avg Speed<br>(MB/s)</div>
+                    </div>
+                </div>
+                
+                <!-- Collapsible section for min/max metrics -->
+                <div class="dropdown-section">
+                    <button class="dropdown-toggle" onclick="toggleDropdown()" id="dropdownBtn">
+                        <span>More Details</span>
+                        <span class="dropdown-arrow">▼</span>
+                    </button>
+                    <div class="dropdown-content" id="dropdownContent">
+                        <div class="metrics">
+                            <div class="metric-card">
+                                <div class="metric-value" id="maxThroughput">--</div>
+                                <div class="metric-label">Max Throughput (Gbps)</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-value" id="maxSpeed">--</div>
+                                <div class="metric-label">Max Speed<br>MB/s)</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-value" id="minThroughput">--</div>
+                                <div class="metric-label">Min Throughput (Gbps)</div>
+                            </div>
+                            <div class="metric-card">
+                                <div class="metric-value" id="minSpeed">--</div>
+                                <div class="metric-label">Min Speed<br>(MB/s)</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="display-panel">
+            <div class="thumbnail-display">
+                <div class="thumbnail-header">
+                    <div class="thumbnail-title">Received Images</div>
+                    <div class="thumbnail-counter" id="thumbnailCounter">0/9 displayed</div>
+                </div>
+                <div class="thumbnail-grid" id="thumbnailGrid">
+                    <!-- Slots will be generated by JavaScript -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Socket.IO for real-time communication -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    
+    <script>
+        let receiverRunning = false;
+        let selectedFile = null;
+        let transferInProgress = false;
+        let socket = null;
+        let currentTransferCount = 0;
+        let totalTransfers = 9;  // Updated for repeat transfers
+
+        // Initialize WebSocket connection
+        function initializeSocket() {
+            socket = io();
+            
+            socket.on('connect', function() {
+                console.log('Connected to server via WebSocket');
+            });
+            
+            socket.on('disconnect', function() {
+                console.log('Disconnected from server');
+            });
+            
+            // Handle real-time thumbnail updates
+            socket.on('thumbnail_update', function(data) {
+                console.log('Thumbnail update received:', data);
+                updateThumbnailSlotRealtime(parseInt(data.position), data.thumbnail_url, data.error);
+            });
+            
+            // Handle transfer progress updates
+            socket.on('transfer_progress', function(data) {
+                console.log('Transfer progress:', data);
+                updateProgress(data.completed, data.total);
+            });
+            
+            // Handle transfer started
+            socket.on('transfer_started', function(data) {
+                console.log('Transfer started:', data);
+                transferInProgress = true;
+                selectedFile = data.filename;
+                updateTransferStatus('Transfering ...', 'loading');
+                clearAllDisplays_ExceptFileSize();
+                updateProgress(0, data.total_transfers);
+            });
+            
+            // Handle transfer completed
+            socket.on('transfer_completed', function(data) {
+                console.log('Transfer completed:', data);
+                transferInProgress = false;
+                
+                if (data.success) {
+                    // add delay before showing final metrics
+                    setTimeout(function() {
+                        updateMetrics(data.metrics);
+
+                        const source = data.source === 'rdb_sender' ? 'RDB Sender' : 'HPC Receiver';
+                        updateTransferStatus(`All transfers completed`);
+                        updateProgress(totalTransfers, totalTransfers);
+
+                        console.log('Final average metrics from', source + ':', data.metrics);
+                    }, 1500);
+                    // updateMetrics(data.metrics);
+                    
+                    // const source = data.source === 'rdb_sender' ? 'RDB Sender' : 'HPC Receiver';
+                    // updateTransferStatus(`All 10 transfers completed - Average metrics calculated`);
+                    updateProgress(totalTransfers, totalTransfers);
+                    
+                    console.log('Final average metrics from', source + ':', data.metrics);
+                } else {
+                    updateTransferStatus('Transfer failed: ' + data.error, 'error');
+                }
+                
+                document.getElementById('sendBtn').disabled = false;
+            });
+            
+            // Handle system reset
+            socket.on('system_reset', function() {
+                console.log('System reset received');
+                clearAllDisplays();
+                transferInProgress = false;
+                document.getElementById('sendBtn').disabled = true;
+            });
+        }
+
+        // Initialize thumbnail grid with 3x4 layout (12 slots total, showing 9 images)
+        function initializeThumbnailGrid() {
+            const grid = document.getElementById('thumbnailGrid');
+            grid.innerHTML = '';
+            
+            // Create all 12 slots in the 3x4 grid
+            for (let row = 1; row <= 3; row++) {
+                for (let col = 1; col <= 4; col++) {
+                    const slotNumber = (row - 1) * 4 + col; // Calculate slot number (1-12)
+                    
+                    // Skip creating slots 2, 5, 6 as they will be covered by the large slot
+                    if (slotNumber === 2 || slotNumber === 5 || slotNumber === 6) {
+                        continue;
+                    }
+                    
+                    const slot = document.createElement('div');
+                    slot.className = 'thumbnail-slot';
+                    
+                    if (slotNumber === 1) {
+                        // First slot becomes the large slot spanning 2x2
+                        slot.classList.add('large-slot');
+                        slot.id = 'slot-1'; // Image index 1
+                        slot.style.gridColumn = '1 / 3';
+                        slot.style.gridRow = '1 / 3';
+                        slot.style.zIndex = '2';
+                        slot.innerHTML = `
+                            <div class="slot-number">1</div>
+                            <div class="slot-placeholder">Empty</div>
+                        `;
+                    } else {
+                        // Regular visible slots - assign image indices 2-9
+                        let imageIndex;
+                        if (slotNumber === 3) imageIndex = 2;
+                        else if (slotNumber === 4) imageIndex = 3;
+                        else if (slotNumber === 7) imageIndex = 4;
+                        else if (slotNumber === 8) imageIndex = 5;
+                        else if (slotNumber === 9) imageIndex = 6;
+                        else if (slotNumber === 10) imageIndex = 7;
+                        else if (slotNumber === 11) imageIndex = 8;
+                        else if (slotNumber === 12) imageIndex = 9;
+                        
+                        slot.id = `slot-${imageIndex}`;
+                        slot.style.gridColumn = col.toString();
+                        slot.style.gridRow = row.toString();
+                        slot.innerHTML = `
+                            <div class="slot-number">${imageIndex}</div>
+                            <div class="slot-placeholder">Empty</div>
+                        `;
+                    }
+                    
+                    grid.appendChild(slot);
+                }
+            }
+        }
+
+        // Update thumbnail slot with real-time data from WebSocket
+        function updateThumbnailSlotRealtime(position, thumbnailUrl, error) {
+            // Only handle positions 1-9 (we show first 9 out of 10 transfers)
+            if (position < 1 || position > 9) {
+                console.log(`Ignoring image at position ${position} - only showing first 9 images`);
+                return;
+            }
+            
+            const slot = document.getElementById(`slot-${position}`);
+            if (slot) {
+                if (error) {
+                    slot.innerHTML = `
+                        <div class="slot-number">${position}</div>
+                        <div class="slot-placeholder">Error loading image</div>
+                    `;
+                } else if (thumbnailUrl) {
+                    slot.innerHTML = `
+                        <div class="slot-number">${position}</div>
+                        <img src="${thumbnailUrl}" alt="Transfer ${position}">
+                    `;
+                } else {
+                    slot.innerHTML = `
+                        <div class="slot-number">${position}</div>
+                        <div class="slot-placeholder">No thumbnail available</div>
+                    `;
+                }
+            }
+        }
+
+        // Toggle dropdown for more details
+        function toggleDropdown() {
+            const content = document.getElementById('dropdownContent');
+            const arrow = document.querySelector('.dropdown-arrow');
+            const btn = document.getElementById('dropdownBtn');
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                arrow.classList.remove('rotated');
+                btn.querySelector('span').textContent = 'More Details';
+            } else {
+                content.classList.add('expanded');
+                arrow.classList.add('rotated');
+                btn.querySelector('span').textContent = 'Less Details';
+            }
+        }
+
+        // Update progress display
+        // Update progress display
+        function updateProgress(completed, total) {
+            const progressFill = document.getElementById('progressFill');
+            const progressCount = document.getElementById('progressCount');
+            const thumbnailCounter = document.getElementById('thumbnailCounter');
+            
+            const percentage = (completed / total) * 100;
+            
+            progressFill.style.width = `${percentage}%`;
+            progressCount.textContent = `${completed}/${total}`;
+            
+            // For thumbnail counter, we only show up to 9
+            const displayCount = Math.min(completed, 9);
+            thumbnailCounter.textContent = `${displayCount}/9 displayed`;
+        }
+
+        // Basic status polling for receiver state (reduced frequency)
+        function startBasicPolling() {
+            setInterval(async () => {
+                try {
+                    const response = await fetch('/api/status');
+                    const data = await response.json();
+                    
+                    // Only update receiver status, not transfer progress (WebSocket handles that)
+                    if (data.receiver_running !== receiverRunning) {
+                        receiverRunning = data.receiver_running;
+                        updateReceiverUI();
+                    }
+                    
+                } catch (error) {
+                    console.error('Status polling error:', error);
+                }
+            }, 5000); // Poll every 5 seconds for basic status only
+        }
+
+        // Update receiver UI based on status
+        function updateReceiverUI() {
+            const startBtn = document.getElementById('startBtn');
+            const sendBtn = document.getElementById('sendBtn');
+            const closeBtn = document.getElementById('closeBtn');
+            const transferStatus = document.getElementById('transferStatus');
+            
+            if (receiverRunning) {
+                startBtn.textContent = 'Receiver Running';
+                startBtn.disabled = true;
+                sendBtn.disabled = !selectedFile || transferInProgress;
+                closeBtn.disabled = false;
+                transferStatus.textContent = 'Receiver listening';
+                transferStatus.className = 'status success';
+            } else {
+                startBtn.textContent = 'Start Receiver';
+                startBtn.disabled = false;
+                sendBtn.disabled = true;
+                closeBtn.disabled = true;
+                transferStatus.textContent = 'Receiver not started';
+                transferStatus.className = 'status';
+            }
+        }
+
+        // Update transfer status
+        function updateTransferStatus(message, type = '') {
+            const transferStatus = document.getElementById('transferStatus');
+            transferStatus.textContent = message;
+            transferStatus.className = `status ${type}`;
+            if (type === 'loading') {
+                transferStatus.classList.add('pulse');
+            } else {
+                transferStatus.classList.remove('pulse');
+            }
+        }
+
+        // Scan for files on RDB
+        async function scanFiles() {
+            const scanBtn = document.getElementById('scanBtn');
+            const scanStatus = document.getElementById('scanStatus');
+            
+            scanBtn.disabled = true;
+            scanStatus.textContent = 'Scanning RDB...';
+            scanStatus.className = 'status loading pulse';
+            
+            try {
+                const response = await fetch('/api/scan-tif-files');
+                const data = await response.json();
+                
+                if (data.success) {
+                    scanStatus.textContent = `Found ${data.files.length} files`;
+                    scanStatus.className = 'status success';
+                    populateFileSelect(data.files);
+                } else {
+                    scanStatus.textContent = 'Scan failed';
+                    scanStatus.className = 'status error';
+                }
+            } catch (error) {
+                console.error('Scan error:', error);
+                scanStatus.textContent = 'Scan failed: Connection error';
+                scanStatus.className = 'status error';
+            } finally {
+                scanBtn.disabled = false;
+            }
+        }
+
+        // Populate file selection dropdown
+        function populateFileSelect(files) {
+            const select = document.getElementById('fileSelect');
+            select.innerHTML = '';
+            let fileMetadata = {}; // Store file sizes
+            
+            if (files.length === 0) {
+                select.innerHTML = '<option value="">No PNG files found</option>';
+                select.disabled = true;
+            } else {
+                select.innerHTML = '<option value="">Select a file...</option>';
+                files.forEach(file => {
+                    const option = document.createElement('option');
+                    option.value = file.filename;
+                    option.textContent = file.filename;
+                    select.appendChild(option);
+                    fileMetadata[file.filename] = file.size_mb; // Store size
+                });
+                select.disabled = false;
+                
+                select.onchange = function() {
+                    selectedFile = this.value;
+                    clearAllDisplays();
+                    if (selectedFile && fileMetadata[selectedFile]) {
+                        document.getElementById('fileSize').textContent = fileMetadata[selectedFile].toFixed(2);
+                    } else {
+                        document.getElementById('fileSize').textContent = '--';
+                    }
+                    document.getElementById('sendBtn').disabled = !receiverRunning || !selectedFile || transferInProgress;
+                };
+            }
+        }
+
+        // Start file receiver
+        async function startReceiver() {
+            const startBtn = document.getElementById('startBtn');
+            
+            startBtn.disabled = true;
+            updateTransferStatus('Starting receiver...', 'loading');
+            
+            try {
+                const response = await fetch('/api/start-receiver', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    receiverRunning = true;
+                    updateReceiverUI();
+                } else {
+                    updateTransferStatus('Failed to start receiver: ' + data.message, 'error');
+                    startBtn.disabled = false;
+                }
+            } catch (error) {
+                console.error('Start receiver error:', error);
+                updateTransferStatus('Failed to start receiver: Connection error', 'error');
+                startBtn.disabled = false;
+            }
+        }
+
+        // Close file receiver
+        async function closeReceiver() {
+            const closeBtn = document.getElementById('closeBtn');
+            
+            closeBtn.disabled = true;
+            updateTransferStatus('Closing receiver...', 'loading');
+            
+            try {
+                const response = await fetch('/api/close-receiver', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    receiverRunning = false;
+                    transferInProgress = false;
+                    updateReceiverUI();
+                    updateTransferStatus('Receiver closed', 'success');
+                } else {
+                    updateTransferStatus('Failed to close receiver', 'error');
+                    closeBtn.disabled = false;
+                }
+            } catch (error) {
+                console.error('Close receiver error:', error);
+                updateTransferStatus('Failed to close receiver: Connection error', 'error');
+                closeBtn.disabled = false;
+            }
+        }
+
+        // Send file from RDB to HPC (10 times)
+        async function sendFile() {
+            if (!selectedFile) {
+                alert('Please select a file first');
+                return;
+            }
+            
+            const sendBtn = document.getElementById('sendBtn');
+            
+            sendBtn.disabled = true;
+            updateTransferStatus('Initiating 9 repeat transfers...', 'loading');
+            clearAllDisplays_ExceptFileSize();
+            updateProgress(0, totalTransfers);
+            
+            try {
+                const response = await fetch('/api/send-file', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: selectedFile })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Transfer initiated - WebSocket will handle updates
+                    console.log('Repeat transfers initiated successfully');
+                } else {
+                    updateTransferStatus('Transfer failed: ' + data.error, 'error');
+                    transferInProgress = false;
+                    sendBtn.disabled = false;
+                    updateProgress(0, totalTransfers);
+                }
+            } catch (error) {
+                console.error('Send file error:', error);
+                updateTransferStatus('Transfer failed: Connection error', 'error');
+                transferInProgress = false;
+                sendBtn.disabled = false;
+                updateProgress(0, totalTransfers);
+            }
+        }
+
+        // Update metrics display
+        function updateMetrics(metrics) {
+            console.log('Updating final average metrics:', metrics);
+            
+            document.getElementById('fileSize').textContent = 
+                metrics.fileSize ? metrics.fileSize.toFixed(2) : '--';
+            document.getElementById('duration').textContent = 
+                metrics.duration ? metrics.duration.toFixed(3) : '--';
+            document.getElementById('throughput').textContent = 
+                metrics.throughput ? metrics.throughput.toFixed(2) : '--';
+            document.getElementById('speed').textContent = 
+                metrics.speed ? metrics.speed.toFixed(2) : '--';
+            document.getElementById('minThroughput').textContent = 
+                metrics.minThroughput ? metrics.minThroughput.toFixed(2) : '--';
+            document.getElementById('maxThroughput').textContent = 
+                metrics.maxThroughput ? metrics.maxThroughput.toFixed(2) : '--';
+            document.getElementById('minSpeed').textContent = 
+                metrics.minSpeed ? metrics.minSpeed.toFixed(2) : '--';
+            document.getElementById('maxSpeed').textContent = 
+                metrics.maxSpeed ? metrics.maxSpeed.toFixed(2) : '--';
+        }
+
+        // Clear all displays
+        function clearAllDisplays() {
+            clearMetrics();
+            initializeThumbnailGrid();
+            updateProgress(0, totalTransfers);
+        }
+
+        function clearAllDisplays_ExceptFileSize() {
+            document.getElementById('duration').textContent = '--';
+            document.getElementById('throughput').textContent = '--';
+            document.getElementById('speed').textContent = '--';
+            document.getElementById('minThroughput').textContent = '--';
+            document.getElementById('maxThroughput').textContent = '--';
+            document.getElementById('minSpeed').textContent = '--';
+            document.getElementById('maxSpeed').textContent = '--';
+            initializeThumbnailGrid();
+            updateProgress(0, totalTransfers);
+        }
+
+        // Clear metrics
+        function clearMetrics() {
+            document.getElementById('fileSize').textContent = '--';
+            document.getElementById('duration').textContent = '--';
+            document.getElementById('throughput').textContent = '--';
+            document.getElementById('speed').textContent = '--';
+            document.getElementById('minThroughput').textContent = '--';
+            document.getElementById('maxThroughput').textContent = '--';
+            document.getElementById('minSpeed').textContent = '--';
+            document.getElementById('maxSpeed').textContent = '--';
+        }
+
+        // Reset entire system
+        async function resetSystem() {
+            if (!confirm('Are you sure you want to reset the entire system?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/reset', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Reset UI state
+                    receiverRunning = false;
+                    selectedFile = null;
+                    transferInProgress = false;
+                    
+                    document.getElementById('startBtn').textContent = 'Start Receiver';
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('sendBtn').disabled = true;
+                    document.getElementById('closeBtn').disabled = true;
+                    document.getElementById('fileSelect').innerHTML = '<option value="">No files found</option>';
+                    document.getElementById('fileSelect').disabled = true;
+                    
+                    document.getElementById('scanStatus').textContent = 'Ready to scan';
+                    document.getElementById('scanStatus').className = 'status';
+                    document.getElementById('transferStatus').textContent = 'System reset';
+                    document.getElementById('transferStatus').className = 'status';
+                    
+                    clearAllDisplays();
+                } else {
+                    alert('Reset failed');
+                }
+            } catch (error) {
+                console.error('Reset error:', error);
+                alert('Reset failed: Connection error');
+            }
+        }
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            console.log('Page loaded - initializing HPC repeat transfer interface');
+            initializeThumbnailGrid();
+            initializeSocket();
+            startBasicPolling();
+        });
+
+        // Handle page unload to cleanup receiver
+        window.addEventListener('beforeunload', function() {
+            if (receiverRunning) {
+                fetch('/api/close-receiver', { method: 'POST' });
+            }
+            if (socket) {
+                socket.disconnect();
+            }
+        });
+    </script>
+</body>
+</html>
