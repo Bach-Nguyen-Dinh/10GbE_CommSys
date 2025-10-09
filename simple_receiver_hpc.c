@@ -25,21 +25,25 @@
 #define CHUNK_SIZE (32 * 1024 * 1024)  // 32MB chunks
 #define MAGIC_HEADER 0xdeadbeefcafebabe
 
-typedef struct {
+
+// ======================================================================================
+// ================================  Defined structures  ================================
+// ======================================================================================
+typedef struct chuck_header {
     uint32_t chunk_id;
     uint64_t file_offset;
     uint32_t chunk_size;
     uint32_t padding;  // alignment
 } chunk_header_t;
 
-typedef struct {
+typedef struct file_header {
     uint64_t magic;
     uint64_t file_size;
     char filename[256];
     int repeat_count;  // Add repeat count
 } file_header_t;
 
-typedef struct {
+typedef struct thread_data {
     int thread_id;
     int listen_fd;
     int client_fd;
@@ -54,7 +58,7 @@ typedef struct {
 } thread_data_t;
 
 // Global state for repeat coordination
-typedef struct {
+typedef struct repeat_coordinator {
     pthread_barrier_t start_barrier;
     pthread_barrier_t end_barrier;
     int num_streams;
@@ -63,21 +67,217 @@ typedef struct {
     volatile int should_exit;
 } repeat_coordinator_t;
 
-// Global variables
+
+// ====================================================================================
+// ================================  Global variables  ================================
+// ====================================================================================
 static volatile int running = 1;
 static repeat_coordinator_t *global_coordinator = NULL;
-
 static int udp_sock = -1;
 static struct sockaddr_in udp_addr;
 static volatile int udp_initialized = 0;
 
-// Function prototypes
+
+// =======================================================================================
+// ================================  Function prototypes  ================================
+// =======================================================================================
 static void send_progress_update(int transfer_num, int thread_id, size_t bytes_received, 
                                  size_t total_bytes, int chunks_received);
-
 static void send_transfer_event(const char* event, int transfer_num, const char* filename);
+static inline void print_sockbufs(int fd, const char *tag, int is_rx);
+void signal_handler(int sig);
+double get_time();
+int create_listener(int port);
+int set_thread_affinity(int thread_id, int num_cores);
+int send_ready_signal(int control_fd);
+void* receiver_thread(void* arg);
+int save_file(const char *filename, char *data, size_t size);
+static int setup_udp_socket();
 
 
+// ================================================================================
+// ================================  Main program  ================================
+// ================================================================================
+int main(int argc, char *argv[]) {
+    if (argc < 1) return 1;
+
+    int base_port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
+    int num_streams = (argc > 2) ? atoi(argv[2]) : DEFAULT_STREAMS;
+    const char *output_dir = (argc > 3) ? argv[3] : "./";
+    int save_to_disk = (argc > 4) ? atoi(argv[4]) : 1;
+
+    printf("High-Performance File Receiver (Repeat Support)\n");
+    printf("Base port: %d, Streams: %d, Output dir: %s, Save: %s\n",
+           base_port, num_streams, output_dir, save_to_disk ? "yes" : "no");
+
+    signal(SIGINT, signal_handler);
+    signal(SIGKILL, signal_handler);
+
+    if (setup_udp_socket() < 0) {
+        printf("Warning: UDP progress updates disabled\n");
+    }
+
+    int control_fd = create_listener(base_port);
+    if (control_fd < 0) return 1;
+
+    struct sockaddr_in sender_addr; socklen_t sender_len = sizeof(sender_addr);
+    int control_client = accept(control_fd, (struct sockaddr*)&sender_addr, &sender_len);
+    if (control_client < 0) { perror("accept control"); close(control_fd); return 1; }
+
+    file_header_t header;
+    if (recv(control_client, &header, sizeof(header), 0) != (ssize_t)sizeof(header)) {
+        perror("recv header"); close(control_client); close(control_fd); return 1;
+    }
+
+    if (header.magic != MAGIC_HEADER) {
+        printf("Invalid magic header: 0x%lx\n", header.magic);
+        close(control_client); close(control_fd); return 1;
+    }
+
+    int repeat_count = header.repeat_count;
+    if (repeat_count < 1) repeat_count = 1;
+
+    printf("Receiving file: %s, size: %.2f MB, repeats: %d\n", 
+           header.filename, header.file_size / (1024.0*1024.0), repeat_count);
+
+    char *file_data = NULL;
+    if (save_to_disk) {
+        file_data = malloc(header.file_size);
+        if (!file_data) { perror("malloc"); close(control_client); close(control_fd); return 1; }
+    }
+
+    // Initialize repeat coordinator
+    repeat_coordinator_t coordinator;
+    global_coordinator = &coordinator;
+    coordinator.num_streams = num_streams;
+    coordinator.control_client_fd = control_client;
+    coordinator.current_repeat = 0;
+    coordinator.should_exit = 0;
+
+    if (pthread_barrier_init(&coordinator.start_barrier, NULL, num_streams) != 0) {
+        perror("pthread_barrier_init start"); 
+        free(file_data); close(control_client); close(control_fd); return 1;
+    }
+    if (pthread_barrier_init(&coordinator.end_barrier, NULL, num_streams + 1) != 0) {
+        perror("pthread_barrier_init end"); 
+        pthread_barrier_destroy(&coordinator.start_barrier);
+        free(file_data); close(control_client); close(control_fd); return 1;
+    }
+
+    // Create listeners for data streams
+    int listen_fds[num_streams];
+    for (int i = 0; i < num_streams; i++) {
+        int port = base_port + 1 + i;
+        listen_fds[i] = create_listener(port);
+        if (listen_fds[i] < 0) return 1;
+    }
+
+    // Accumulate metrics across all repeats
+    double total_throughput_sum = 0.0;
+    double max_duration_sum = 0.0;
+    int total_chunks_sum = 0;
+
+    // Send initial ready signal
+    if (send_ready_signal(control_client) < 0) {
+        printf("Failed to send initial ready signal\n");
+        goto cleanup;
+    }
+
+    for (int repeat = 0; repeat < repeat_count && running && !coordinator.should_exit; repeat++) {
+        printf("\n--- Receiving transfer %d/%d ---\n", repeat + 1, repeat_count);
+        coordinator.current_repeat = repeat;
+
+        pthread_t threads[num_streams];
+        thread_data_t thread_data[num_streams];
+
+        for (int i = 0; i < num_streams; i++) {
+            thread_data[i].thread_id = i;
+            thread_data[i].listen_fd = listen_fds[i];
+            thread_data[i].client_fd = -1;
+            thread_data[i].port = base_port + 1 + i;
+            thread_data[i].file_data = file_data;
+            thread_data[i].total_file_size = header.file_size;
+            thread_data[i].throughput_mbps = 0.0;
+            thread_data[i].duration = 0.0;
+            thread_data[i].chunks_received = 0;
+            thread_data[i].rx_discard = !save_to_disk;
+            thread_data[i].repeat_num = repeat + 1;
+
+            if (pthread_create(&threads[i], NULL, receiver_thread, &thread_data[i]) != 0) {
+                perror("pthread_create"); return 1;
+            }
+        }
+
+        // Wait for all threads to complete this transfer
+        pthread_barrier_wait(&coordinator.end_barrier);
+
+        for (int i = 0; i < num_streams; i++) {
+            pthread_join(threads[i], NULL);
+        }
+
+        // Accumulate metrics
+        double max_duration = 0.0, total_throughput = 0.0;
+        int total_chunks = 0;
+        for (int i = 0; i < num_streams; i++) {
+            total_throughput += thread_data[i].throughput_mbps;
+            total_chunks += thread_data[i].chunks_received;
+            if (thread_data[i].duration > max_duration) max_duration = thread_data[i].duration;
+        }
+
+        total_throughput_sum += total_throughput;
+        max_duration_sum += max_duration;
+        total_chunks_sum += total_chunks;
+
+        // Send ready signal for next transfer (except after last transfer)
+        if (repeat < repeat_count - 1) {
+            printf("Sending ready signal for next transfer...\n");
+            if (send_ready_signal(control_client) < 0) {
+                printf("Failed to send ready signal for repeat %d\n", repeat + 2);
+                break;
+            }
+        }
+    }
+    printf("\nAll transfers completed or interrupted.\n");
+
+    // Calculate and print final averages
+    double avg_throughput = total_throughput_sum / repeat_count;
+    double avg_duration = max_duration_sum / repeat_count;
+    double avg_throughput_gbps = avg_throughput * 8 / 1000.0;
+
+    printf("\n=== FINAL AVERAGE RESULTS (%d transfers) ===\n", repeat_count);
+    printf("File size: %.2f MB\n", header.file_size / (1024.0 * 1024.0));
+    printf("Average duration: %.2f seconds\n", avg_duration);
+    printf("Average throughput: %.2f MB/s (%.2f Gbps)\n", avg_throughput, avg_throughput_gbps);
+
+    if (save_to_disk) {
+        char path[512]; 
+        snprintf(path, sizeof(path), "%s/%s", output_dir, header.filename);
+        if (save_file(path, file_data, header.file_size) == 0) {
+            printf("Final file saved: %s\n", path);
+        } else {
+            printf("Failed to save final file\n");
+        }
+    }
+
+cleanup:
+    close(control_client);
+    close(control_fd);
+    for (int i = 0; i < num_streams; i++) {
+        close(listen_fds[i]);
+    }
+    free(file_data);
+    pthread_barrier_destroy(&coordinator.start_barrier);
+    pthread_barrier_destroy(&coordinator.end_barrier);
+    if (udp_sock >= 0) {
+        close(udp_sock);
+    }
+    return 0;
+}
+
+
+// =========================================================================================
+// ================================  Functions definitions  ================================
+// =========================================================================================
 static inline void print_sockbufs(int fd, const char *tag, int is_rx) {
     int sz = 0; socklen_t sl = sizeof(sz);
     int lev = SOL_SOCKET, opt = is_rx ? SO_RCVBUF : SO_SNDBUF;
@@ -315,180 +515,4 @@ static void send_transfer_event(const char* event, int transfer_num, const char*
     
     sendto(udp_sock, msg, strlen(msg), 0, 
            (struct sockaddr*)&udp_addr, sizeof(udp_addr));
-}
-
-int main(int argc, char *argv[]) {
-    if (argc < 1) return 1;
-
-    int base_port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
-    int num_streams = (argc > 2) ? atoi(argv[2]) : DEFAULT_STREAMS;
-    const char *output_dir = (argc > 3) ? argv[3] : "./";
-    int save_to_disk = (argc > 4) ? atoi(argv[4]) : 1;
-
-    printf("High-Performance File Receiver (Repeat Support)\n");
-    printf("Base port: %d, Streams: %d, Output dir: %s, Save: %s\n",
-           base_port, num_streams, output_dir, save_to_disk ? "yes" : "no");
-
-    signal(SIGINT, signal_handler);
-    signal(SIGKILL, signal_handler);
-
-    if (setup_udp_socket() < 0) {
-        printf("Warning: UDP progress updates disabled\n");
-    }
-
-    int control_fd = create_listener(base_port);
-    if (control_fd < 0) return 1;
-
-    struct sockaddr_in sender_addr; socklen_t sender_len = sizeof(sender_addr);
-    int control_client = accept(control_fd, (struct sockaddr*)&sender_addr, &sender_len);
-    if (control_client < 0) { perror("accept control"); close(control_fd); return 1; }
-
-    file_header_t header;
-    if (recv(control_client, &header, sizeof(header), 0) != (ssize_t)sizeof(header)) {
-        perror("recv header"); close(control_client); close(control_fd); return 1;
-    }
-
-    if (header.magic != MAGIC_HEADER) {
-        printf("Invalid magic header: 0x%lx\n", header.magic);
-        close(control_client); close(control_fd); return 1;
-    }
-
-    int repeat_count = header.repeat_count;
-    if (repeat_count < 1) repeat_count = 1;
-
-    printf("Receiving file: %s, size: %.2f MB, repeats: %d\n", 
-           header.filename, header.file_size / (1024.0*1024.0), repeat_count);
-
-    char *file_data = NULL;
-    if (save_to_disk) {
-        file_data = malloc(header.file_size);
-        if (!file_data) { perror("malloc"); close(control_client); close(control_fd); return 1; }
-    }
-
-    // Initialize repeat coordinator
-    repeat_coordinator_t coordinator;
-    global_coordinator = &coordinator;
-    coordinator.num_streams = num_streams;
-    coordinator.control_client_fd = control_client;
-    coordinator.current_repeat = 0;
-    coordinator.should_exit = 0;
-
-    if (pthread_barrier_init(&coordinator.start_barrier, NULL, num_streams) != 0) {
-        perror("pthread_barrier_init start"); 
-        free(file_data); close(control_client); close(control_fd); return 1;
-    }
-    if (pthread_barrier_init(&coordinator.end_barrier, NULL, num_streams + 1) != 0) {
-        perror("pthread_barrier_init end"); 
-        pthread_barrier_destroy(&coordinator.start_barrier);
-        free(file_data); close(control_client); close(control_fd); return 1;
-    }
-
-    // Create listeners for data streams
-    int listen_fds[num_streams];
-    for (int i = 0; i < num_streams; i++) {
-        int port = base_port + 1 + i;
-        listen_fds[i] = create_listener(port);
-        if (listen_fds[i] < 0) return 1;
-    }
-
-    // Accumulate metrics across all repeats
-    double total_throughput_sum = 0.0;
-    double max_duration_sum = 0.0;
-    int total_chunks_sum = 0;
-
-    // Send initial ready signal
-    if (send_ready_signal(control_client) < 0) {
-        printf("Failed to send initial ready signal\n");
-        goto cleanup;
-    }
-
-    for (int repeat = 0; repeat < repeat_count && running && !coordinator.should_exit; repeat++) {
-        printf("\n--- Receiving transfer %d/%d ---\n", repeat + 1, repeat_count);
-        coordinator.current_repeat = repeat;
-
-        pthread_t threads[num_streams];
-        thread_data_t thread_data[num_streams];
-
-        for (int i = 0; i < num_streams; i++) {
-            thread_data[i].thread_id = i;
-            thread_data[i].listen_fd = listen_fds[i];
-            thread_data[i].client_fd = -1;
-            thread_data[i].port = base_port + 1 + i;
-            thread_data[i].file_data = file_data;
-            thread_data[i].total_file_size = header.file_size;
-            thread_data[i].throughput_mbps = 0.0;
-            thread_data[i].duration = 0.0;
-            thread_data[i].chunks_received = 0;
-            thread_data[i].rx_discard = !save_to_disk;
-            thread_data[i].repeat_num = repeat + 1;
-
-            if (pthread_create(&threads[i], NULL, receiver_thread, &thread_data[i]) != 0) {
-                perror("pthread_create"); return 1;
-            }
-        }
-
-        // Wait for all threads to complete this transfer
-        pthread_barrier_wait(&coordinator.end_barrier);
-
-        for (int i = 0; i < num_streams; i++) {
-            pthread_join(threads[i], NULL);
-        }
-
-        // Accumulate metrics
-        double max_duration = 0.0, total_throughput = 0.0;
-        int total_chunks = 0;
-        for (int i = 0; i < num_streams; i++) {
-            total_throughput += thread_data[i].throughput_mbps;
-            total_chunks += thread_data[i].chunks_received;
-            if (thread_data[i].duration > max_duration) max_duration = thread_data[i].duration;
-        }
-
-        total_throughput_sum += total_throughput;
-        max_duration_sum += max_duration;
-        total_chunks_sum += total_chunks;
-
-        // Send ready signal for next transfer (except after last transfer)
-        if (repeat < repeat_count - 1) {
-            printf("Sending ready signal for next transfer...\n");
-            if (send_ready_signal(control_client) < 0) {
-                printf("Failed to send ready signal for repeat %d\n", repeat + 2);
-                break;
-            }
-        }
-    }
-    printf("\nAll transfers completed or interrupted.\n");
-
-    // Calculate and print final averages
-    double avg_throughput = total_throughput_sum / repeat_count;
-    double avg_duration = max_duration_sum / repeat_count;
-    double avg_throughput_gbps = avg_throughput * 8 / 1000.0;
-
-    printf("\n=== FINAL AVERAGE RESULTS (%d transfers) ===\n", repeat_count);
-    printf("File size: %.2f MB\n", header.file_size / (1024.0 * 1024.0));
-    printf("Average duration: %.2f seconds\n", avg_duration);
-    printf("Average throughput: %.2f MB/s (%.2f Gbps)\n", avg_throughput, avg_throughput_gbps);
-
-    if (save_to_disk) {
-        char path[512]; 
-        snprintf(path, sizeof(path), "%s/%s", output_dir, header.filename);
-        if (save_file(path, file_data, header.file_size) == 0) {
-            printf("Final file saved: %s\n", path);
-        } else {
-            printf("Failed to save final file\n");
-        }
-    }
-
-cleanup:
-    close(control_client);
-    close(control_fd);
-    for (int i = 0; i < num_streams; i++) {
-        close(listen_fds[i]);
-    }
-    free(file_data);
-    pthread_barrier_destroy(&coordinator.start_barrier);
-    pthread_barrier_destroy(&coordinator.end_barrier);
-    if (udp_sock >= 0) {
-        close(udp_sock);
-    }
-    return 0;
 }
