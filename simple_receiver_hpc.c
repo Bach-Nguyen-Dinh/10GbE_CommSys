@@ -1,6 +1,6 @@
 // Compile and Run
 // gcc -O3 -Wall -pthread -std=gnu11 -o simple_receiver_hpc simple_receiver_hpc.c -lm
-// ./simple_receiver_hpc 5303 4 ./ 0 -r 10
+// ./simple_receiver_hpc 5303 4 1 ./
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -106,12 +106,16 @@ int main(int argc, char *argv[]) {
 
     int base_port = (argc > 1) ? atoi(argv[1]) : DEFAULT_PORT;
     int num_streams = (argc > 2) ? atoi(argv[2]) : DEFAULT_STREAMS;
-    const char *output_dir = (argc > 3) ? argv[3] : "./";
-    int save_to_disk = (argc > 4) ? atoi(argv[4]) : 1;
+    int save_to_disk = (argc > 3) ? atoi(argv[3]) : 1;
+    const char *output_dir = (argc > 4) ? argv[4] : "./";
 
-    printf("High-Performance File Receiver (Repeat Support)\n");
-    printf("Base port: %d, Streams: %d, Output dir: %s, Save: %s\n",
-           base_port, num_streams, output_dir, save_to_disk ? "yes" : "no");
+    printf("Multiple Files Receiver\n");
+    if (save_to_disk) {
+        printf("Base port: %d, Streams: %d, Output dir: %s\n", base_port, num_streams, output_dir);
+    }
+    else {
+        printf("Base port: %d, Streams: %d\n", base_port, num_streams);
+    }
 
     signal(SIGINT, signal_handler);
     signal(SIGKILL, signal_handler);
