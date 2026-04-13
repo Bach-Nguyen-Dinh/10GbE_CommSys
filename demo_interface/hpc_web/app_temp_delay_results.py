@@ -23,10 +23,12 @@ HPC_IP = "169.254.207.40"
 RECEIVER_PORT = 5303
 RECEIVER_STREAMS = 4
 REPEAT_COUNT = 10
-RECEIVED_FILES_DIR = "/home/bach-ngd/hpc_web/static/images"
-WEB_STATIC_DIR = "/home/bach-ngd/hpc_web/static/images"
-THUMBNAIL_DIR = "/home/bach-ngd/hpc_web/static/thumbnails"
-RECEIVER_BINARY = "/home/bach-ngd/10GbE_CommSys/simple_receiver_hpc"
+BASE_DIR = Path(__file__).resolve().parent
+RECEIVED_FILES_DIR = str(BASE_DIR / "static/images")
+WEB_STATIC_DIR = str(BASE_DIR / "static/images")
+THUMBNAIL_DIR = str(BASE_DIR / "static/thumbnails")
+RECEIVER_BINARY = str(BASE_DIR.parent.parent / "./simple_receiver_hpc")
+TEMPLATE_DIR = str(BASE_DIR / "templates")
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -762,19 +764,17 @@ if __name__ == '__main__':
         print(f"Receiver Binary: {RECEIVER_BINARY}")
         
         # Verify paths
-        base_dir = "/home/bach-ngd/hpc_web"
-        template_dir = f"{base_dir}/templates"
         
-        print(f"Base directory: {base_dir}")
-        print(f"Templates: {template_dir}")
+        print(f"Base directory: {BASE_DIR}")
+        print(f"Templates: {TEMPLATE_DIR}")
         print(f"Static images: {WEB_STATIC_DIR}")
         print(f"Thumbnails: {THUMBNAIL_DIR}")
         
         # Set template directory
-        app.template_folder = template_dir
+        app.template_folder = TEMPLATE_DIR
         
         # Create directories
-        os.makedirs(template_dir, exist_ok=True)
+        os.makedirs(TEMPLATE_DIR, exist_ok=True)
         os.makedirs(RECEIVED_FILES_DIR, exist_ok=True)
         os.makedirs(WEB_STATIC_DIR, exist_ok=True)
         os.makedirs(THUMBNAIL_DIR, exist_ok=True)

@@ -17,8 +17,12 @@ from pathlib import Path
 from flask import Flask, request, jsonify
 
 # Configuration
-DEMO_PATH = "/home/user/demo"
-SENDER_BINARY = "./simple_sender_rdb"
+# Get the directory where app_rdb.py is located
+BASE_DIR = Path(__file__).resolve().parent 
+# demo_resources is two levels up from rdb_web/
+DEMO_PATH = str(BASE_DIR.parent.parent / "demo_resources")
+# simple_sender_rdb is also two levels up
+SENDER_BINARY = str(BASE_DIR.parent.parent / "simple_sender_rdb")
 DEFAULT_STREAMS = 4
 DEFAULT_USE_ZEROCOPY = 1
 DEFAULT_REPEAT_COUNT = 9  # Default number of repeat transfers
