@@ -24,6 +24,9 @@
 #define DEFAULT_PORT 5303
 #define CHUNK_SIZE (32 * 1024 * 1024)  // 32MB chunks
 #define MAGIC_HEADER 0xdeadbeefcafebabe
+#define PROGRESS_IP "127.0.0.1"
+#define PROGRESS_PORT 5666
+#define LISTEN_BUFF 128 * 1024 * 1024
 
 
 // ======================================================================================
@@ -117,33 +120,51 @@ int main(int argc, char *argv[]) {
         printf("Warning: UDP progress updates disabled\n");
     }
 
+    // Set to listen for traffic
     int control_fd = create_listener(base_port);
-    if (control_fd < 0) return 1;
+    if (control_fd < 0) {
+        return 1;
+    }
 
-    struct sockaddr_in sender_addr; socklen_t sender_len = sizeof(sender_addr);
+    // Blocking mode, wait til remote client connects
+    struct sockaddr_in sender_addr; 
+    socklen_t sender_len = sizeof(sender_addr);
     int control_client = accept(control_fd, (struct sockaddr*)&sender_addr, &sender_len);
-    if (control_client < 0) { perror("accept control"); close(control_fd); return 1; }
+    if (control_client < 0) {
+        perror("accept control");
+        close(control_fd);
+        return 1;
+    }
 
+    // Make sure to receive header first before perform task described in the header 
     file_header_t header;
     if (recv(control_client, &header, sizeof(header), 0) != (ssize_t)sizeof(header)) {
-        perror("recv header"); close(control_client); close(control_fd); return 1;
+        perror("recv header");
+        close(control_client);
+        close(control_fd);
+        return 1;
     }
-
     if (header.magic != MAGIC_HEADER) {
         printf("Invalid magic header: 0x%lx\n", header.magic);
-        close(control_client); close(control_fd); return 1;
+        close(control_client);
+        close(control_fd); 
+        return 1;
     }
-
     int repeat_count = header.repeat_count;
-    if (repeat_count < 1) repeat_count = 1;
-
+    if (repeat_count < 1) {
+        repeat_count = 1;
+    }
     printf("Receiving file: %s, size: %.2f MB, repeats: %d\n", 
            header.filename, header.file_size / (1024.0*1024.0), repeat_count);
-
     char *file_data = NULL;
     if (save_to_disk) {
         file_data = malloc(header.file_size);
-        if (!file_data) { perror("malloc"); close(control_client); close(control_fd); return 1; }
+        if (!file_data) {
+            perror("malloc");
+            close(control_client);
+            close(control_fd);
+            return 1;
+        }
     }
 
     // Initialize repeat coordinator
@@ -306,12 +327,15 @@ double get_time() {
 
 int create_listener(int port) {
     int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd < 0) { perror("socket"); return -1; }
+    if (listen_fd < 0) {
+        perror("socket");
+        return -1;
+    }
 
     int opt = 1;
     setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    int buffer_size = 128 * 1024 * 1024;
+    int buffer_size = LISTEN_BUFF;
     setsockopt(listen_fd, SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size));
 
     struct sockaddr_in addr;
@@ -320,10 +344,18 @@ int create_listener(int port) {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons(port);
 
-    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) { perror("bind"); close(listen_fd); return -1; }
-    if (listen(listen_fd, 128) < 0) { perror("listen"); close(listen_fd); return -1; }
+    if (bind(listen_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        close(listen_fd);
+        return -1;
+    }
+    if (listen(listen_fd, 128) < 0) {
+        perror("listen");
+        close(listen_fd);
+        return -1;
+    }
 
-    printf("Thread listening on port %d\n", port);
+    printf("Listening for incomming data on port %d\n", port);
     return listen_fd;
 }
 
@@ -485,11 +517,11 @@ static int setup_udp_socket() {
     
     memset(&udp_addr, 0, sizeof(udp_addr));
     udp_addr.sin_family = AF_INET;
-    udp_addr.sin_port = htons(5666);  // Changed to port 5666
-    inet_pton(AF_INET, "127.0.0.1", &udp_addr.sin_addr);
+    udp_addr.sin_port = htons(PROGRESS_PORT);
+    inet_pton(AF_INET, PROGRESS_IP, &udp_addr.sin_addr);
     
     udp_initialized = 1;
-    printf("UDP progress socket setup complete (port 5666)\n");
+    printf("UDP progress socket setup complete (%s:%d)\n", PROGRESS_IP, PROGRESS_PORT);
     return 0;
 }
 
