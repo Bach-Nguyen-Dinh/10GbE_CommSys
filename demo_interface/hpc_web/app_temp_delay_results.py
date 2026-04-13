@@ -282,6 +282,29 @@ class HPCFileTransferManager:
         os.makedirs(WEB_STATIC_DIR, exist_ok=True)
         os.makedirs(THUMBNAIL_DIR, exist_ok=True)
         
+    def scan_rdb_tif_files(self):
+        """Request RDB to scan for TIF files"""
+        try:
+            print(f"Scanning RDB at: {RDB_FLASK_URL}/api/scan-tif-files")
+            response = requests.get(f"{RDB_FLASK_URL}/api/scan-tif-files", timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('success'):
+                    file_info = data.get('file_info', [])
+                    print(f"Successfully got {len(file_info)} TIF files from RDB")
+                    return file_info
+                else:
+                    print(f"RDB returned error: {data}")
+                    return []
+            else:
+                print(f"RDB returned status {response.status_code}")
+                return []
+
+        except Exception as e:
+            print(f"Error scanning RDB TIF files: {e}")
+            return []
+
     def scan_rdb_png_files(self):
         """Request RDB to scan for PNG files"""
         try:
@@ -564,7 +587,7 @@ manager = HPCFileTransferManager()
 def index():
     """Main page"""
     try:
-        return render_template('index_hpc.html')
+        return render_template('index_temp.html')
     except:
         # Fallback to existing template
         try:
@@ -572,7 +595,7 @@ def index():
         except:
             return '''
             <h1>HPC File Transfer Interface</h1>
-            <p>Template files not found. Please create templates/index_hpc.html</p>
+            <p>Template files not found. Please create templates/index_temp.html</p>
             <p><a href="/debug">Debug Info</a></p>
             '''
 
@@ -608,7 +631,7 @@ def api_test():
 
 @app.route('/api/scan-files')
 def scan_files():
-    """Scan RDB for files"""
+    """Scan RDB for PNG files"""
     try:
         print("=== API /api/scan-files called ===")
         files = manager.scan_rdb_png_files()
@@ -619,6 +642,27 @@ def scan_files():
         })
     except Exception as e:
         print(f"Error in scan-files: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'files': []
+        })
+
+@app.route('/api/scan-tif-files')
+def scan_tif_files():
+    """Scan RDB for TIF files"""
+    try:
+        print("=== API /api/scan-tif-files called ===")
+        file_info = manager.scan_rdb_tif_files()
+        print(f"Returning {len(file_info)} TIF files")
+        return jsonify({
+            'success': True,
+            'files': file_info
+        })
+    except Exception as e:
+        print(f"Error in scan-tif-files: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -795,7 +839,6 @@ if __name__ == '__main__':
         print("Test endpoints:")
         print(f"  http://169.254.207.40:5110/debug")
         print(f"  http://169.254.207.40:5110/api/test")
-        print(f"  http://169.254.207.40:5110/api/scan-files")
         
         socketio.run(app, host='0.0.0.0', port=5110, debug=False)
         
