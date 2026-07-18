@@ -37,9 +37,37 @@ Two machines communicate over a 10GbE link:
 
 ### Web Interfaces (`demo_interface/`)
 
-- `hpc_web/app.py` — Flask + Flask-SocketIO app on the HPC side; launches receiver subprocess, tracks progress, displays received images
-- `rdb_web/app_rdb.py` — Flask app on the RDB side; scans for files, launches sender
-- `app_temp.py` / `app_temp_delay_results.py` — alternate HPC interface variants
+Two Flask apps drive an end-to-end demo. The HPC app is the user-facing UI; it
+orchestrates the RDB app over HTTP:
+
+- `hpc_web/app.py` — Flask + Flask-SocketIO UI, serves on **port 5110**. Launches
+  the receiver subprocess, parses its stdout for READY/COMPLETE/TRANSFER signals,
+  and pushes live thumbnail/progress updates to the browser over SocketIO.
+  Watches the received-files directory with `watchdog`.
+- `rdb_web/app_rdb.py` — headless Flask REST service on the RDB side, serves on
+  **port 5111**. Scans `demo_resources/` for files and runs `simple_sender_rdb`,
+  parsing the sender's `=== FINAL AVERAGE RESULTS ===` block into JSON metrics.
+- `hpc_web/app_temp.py` / `app_temp_delay_results.py` — alternate HPC UI variants
+  (`app_temp_delay_results.py` is the one with TIF-file support).
+
+**Demo flow:** browser → HPC `app.py` starts receiver → HPC POSTs `/api/send-file`
+to RDB `app_rdb.py` → RDB runs the sender and returns averaged metrics → HPC relays
+metrics + latest thumbnail to the browser via SocketIO.
+
+**Key REST endpoints (RDB `app_rdb.py`):** `GET /api/scan-files` (PNG),
+`GET /api/scan-tif-files` (recursive `.tif`/`.tiff` scan of `demo_resources/`),
+`POST /api/send-file`, `POST /api/stop-transfer`, `GET /api/status`, `GET /health`.
+
+**Note on ports:** the web demo hard-codes the receiver port as **5202** and the
+receiver binary as `file_receiver_hpc_controlled` (not the `5303` / `simple_*`
+defaults used for manual CLI runs). Update the constants at the top of each
+`app*.py` (`RECEIVER_PORT`, `RECEIVER_BINARY`, `RDB_FLASK_URL`, `HPC_IP`) to match
+your setup.
+
+- `demo_resources/` (repo root, not tracked) — source PNG/TIF files the RDB app
+  scans and sends; resolved two levels up from `rdb_web/`.
+- `hpc_web/templates/` — `index.html` (used by `app.py`) and `index_temp.html`
+  (used by the temp variants); thumbnails served from `hpc_web/static/thumbnails/`.
 
 ## Build Commands
 
